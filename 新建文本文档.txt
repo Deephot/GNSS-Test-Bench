@@ -1,0 +1,34 @@
+apt install hackrf libhackrf-dev libhackrf0
+git clone https://github.com/Deephot/GNSS-Test-Bench.git
+		cd GNSS Test Bench\sourse
+		gcc gpssim.c -lm -O3 -o gps-sdr-sim
+#sh Files
+
+
+#钓鱼岛位置：25.7717210800,123.5290718079
+#星历文件：brdc.n=brdc1360.20n
+#N为GPS导航电文
+#星历时间：2020/5/15  00:00:00~04:00:00
+
+#TC_GPS_1 位置欺骗
+./gps-sdr-sim -e brdc.n -l 25.7717210800,123.5290718079 -o tc_gps_1.bin -b 8 -v
+
+#TC_GPS_3 当日星历，-T 重写TOC和TOE的UTC启动时间为2020/5/11,10:18:18（北京时间18:03:03）
+./gps-sdr-sim -e brdc.n -l 25.7717210800,123.5290718079  -T 2020/5/11,10:18:18 -o tc_gps_3.bin -b 8 -v
+#TC_GPS_4 上海市体育运动学校运动场 跑步，-t 替换UTC启动UTC启动时间为2020/5/15,00:06:06（北京时间8:03:03）
+./gps-sdr-sim -e brdc.n -g W.txt -t 2020/5/15,00:06:06 -o tc_gps_4.bin -b 8 -v
+
+
+#sh Files
+#File Name:tc_gps_1
+#!/bin/sh
+hackrf_transfer -t /root/GPS_Spoofing/GPS/tc_gps_1.bin -f 1575420000 -s 2600000 -a 1 -x 30
+#File Name:tc_gps_2
+#!/bin/sh
+hackrf_transfer -t /root/GPS_Spoofing/GPS/tc_gps_2.bin -f 1575420000 -s 2600000 -a 1 -x 30
+#File Name:tc_gps_3
+#!/bin/sh
+hackrf_transfer -t /root/GPS_Spoofing/GPS/tc_gps_3.bin -f 1575420000 -s 2600000 -a 1 -x 30
+#File Name:tc_gps_4
+#!/bin/sh
+hackrf_transfer -t /root/GPS_Spoofing/GPS/tc_gps_4.bin -f 1575420000 -s 2600000 -a 1 -x 30
