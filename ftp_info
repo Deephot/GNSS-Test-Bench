@@ -1,0 +1,15 @@
+# GNSSWHU (China wuhan university )
+ wuhan address           igs.gnsswhu.cn
+ wuhan login             anonymous
+ wuhan password
+ wuhan waddress          igs.gnsswhu.cn
+ wuhan wlogin            anonymous
+ wuhan wpassword
+ wuhan ftp command       ftp -inv
+ wuhan rinex directory   /pub/gps/data/daily/YYYY/DDD/YYo
+ wuhan navalt directory  /pub/gps/data/daily/YYYY/DDD/YYn
+ wuhan sp3 directory     /pub/gps/products/GPSW
+ wuhan ion directory     /pub/gps/products/ionex/YYYY/DDD
+————————————————
+版权声明：本文为CSDN博主「zzh_my」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/zzh_my/article/details/106029147
