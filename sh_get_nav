@@ -1,0 +1,392 @@
+#!/bin/csh -f
+#
+#doc Get rinex navigation files by day number from the CDDIS or SOPAC archives
+#doc
+#
+# Last modified 99/04/15 by Simon McClusky
+# MOD OCh 120626: Add wget option
+# MOD MAF 170810: Added trap to use ncftp when "ftp" client is actually "gftp", which interacts with the
+#                 server differently to legacy "ftp" and is tricky to use for non-interactive sessions.
+
+######################## INSTRUCTIONS #############################
+# See if arguments passed
+if( $#argv == 0 ) then
+  echo "===================================================================================="
+  echo " Get RINEX navigation files from the CDDIS or SOPAC archives  " 
+  echo "  "
+  echo " Usage: sh_get_nav -archive <cddis/sopac> -yr <yr> -doy <doy> -ndays <num> -navdir <navdir> -allnav -ftp_prog <ftp/ncftp>"
+  echo "  "
+  echo "        <archive>  Either sopac or cddis  [Default sopac] "
+  echo "        <yr> 4 char year of nav data requested  [Required] "
+  echo "        <doy> 3 char day of year of nav data requested [Required] " 
+  echo "        <num> Number of consecutive days of data to retreive [Default 1] "
+  echo "        <navdir> CDDIS directory for nav files.  Defaults to 'navfile', which will get "
+  echo "            GPS-only brdcDDDD.YYn files from standard CDDIS or SOPAC directories"
+  echo "           'navalt' will look for brdcDDD0.YYn files in the CDDIS RINEX observation directory"
+  echo "           'navmgex' will get brdmDDD0.YYp from the CDDIS campaign/mgex directory "
+  echo "        <allnav> Retreive all nav files, NOT only combined brdc or auto files. [Default no]" 
+  echo "        <ftp/ncftp/wget> select ftp program to use [default is ftp]"
+  echo "  "                                               
+  echo " Examples: sh_get_nav -yr 2018 -doy 015 -navdir navmgex "
+  echo "           sh_get_nav -archive sopac -yr 1998 -doy 235 -ndays 1 -ftp_prog ncftp"
+  echo "  "
+  echo "===================================================================================="
+  exit
+endif 
+
+##################### SET UP DEFAULTS #############################   
+set numd = 1
+set year = ''
+set yr = ''
+set doy = ''
+set site = ''
+set archive = cddis
+set navdir = 'navfile'                                         
+set allnav = no
+set ftp_prog = 'ftp -inv'
+set wlogin = ''         #OCh
+set wgetsite = ''       #OCh
+set wgetoptions = ''    #OCh
+
+##################### DECIPHER COMMAND LINE #######################   
+while ($#argv > 0 )
+  set input = ( $argv )
+  switch($input[1])
+    case -ar*:
+      set archive  = $input[2]  
+    breaksw 
+    case -nd*:
+      set numd = $input[2] 
+    breaksw 
+    case -y*:
+      set year = $input[2]
+# Variable yr[1] = 4 char yr, yr[2] = 2 char yr, yr[3] = 1 char yr
+      set yr = `sh_year -year $year`
+    breaksw 
+    case -d*:
+      set doy = `echo $input[2] | awk '{printf" %03d \n", $1}'`
+    breaksw 
+    case -navdir: 
+      set navdir = $input[2]
+    breaksw 
+    case -al*:
+      set allnav = yes 
+    breaksw 
+    case -ftp_prog:
+      set ftp_prog = $input[2] 
+    breaksw 
+  endsw
+  if ( $#argv > 0 ) shift argv
+end
+alldone:
+
+# Added by MAF (2017-08-10, MIT) to check if ftp is aliased or linked to gftp on local machine
+# Appended by MAF (2018-06-07, MIT) to check if ftp is missing, e.g. on macOS High Sierra
+if ( `echo $ftp_prog | awk '{print $1}'` == 'ftp' && `ftp -v << quit` != '' ) then
+  if ( `which ncftp` =~ '*ncftp' ) then
+    set ftp_prog = 'ncftp'
+    echo 'ftp command aliased or linked to gftp; trying ncftp instead'
+  else if ( `which wget` =~ '*wget' ) then
+    set ftp_prog = 'wget'
+    echo 'ftp command aliased or linked to gftp; trying wget instead'
+  endif
+else if ( `echo $ftp_prog | awk '{print $1}'` == 'ftp' && `which ftp` !~ '*ftp' ) then
+  if ( `which ncftp` =~ '*ncftp' ) then
+    set ftp_prog = 'ncftp'
+    echo 'ftp command not found; trying ncftp instead'
+  else if ( `which wget` =~ '*wget' ) then
+    set ftp_prog = 'wget'
+    echo 'ftp command not found; trying wget instead'
+  endif
+endif
+
+##################### READ THE FTP_INFO TEMPLATE ############################    
+#
+set ftp_info = `sh_get_ftp_info -archive $archive -type $navdir`
+
+while ($#ftp_info > 0 )
+  set input = ( $ftp_info )
+  switch($input[1])
+    case -ftpsite:
+      set ftpsite  = $input[2]  
+    breaksw 
+    case -ftplogin:
+      set ftplogin  = (`echo $ftp_info | cut -d- -f2`); shift ftplogin 
+    breaksw 
+    case -ftpdir:
+      set ftpdir  = $input[2]  
+    breaksw 
+    case -ftpcmd:
+      set ftpcmd  = (`echo $ftp_info | cut -d% -f2`); shift ftpcmd  
+    breaksw 
+    case -wgetsite:                                                 #OCh
+      set wgetsite  = $input[2]                                     #OCh
+    breaksw                                                         #OCh
+    case -wlogin:                                                   #OCh
+      set wlogin  = (`echo $ftp_info | cut -d- -f2`); shift wlogin  #OCh
+    breaksw                                                         #OCh
+  endsw
+  if ( $#ftp_info > 0 ) shift ftp_info
+end
+
+echo "Information extracted from ftp_info"
+echo "########################################"
+echo "ftpsite $ftpsite"
+echo "ftplogin $ftplogin"
+echo "ftpdir $ftpdir"
+echo "ftpcmd $ftpcmd"
+if ( $wgetsite != '' ) echo "wgetsite $wgetsite"                    #OCh
+if ( `echo $wlogin | wc -w` > 0  ) echo "wlogin $wlogin"            #OCh
+echo "########################################"
+
+##################### GET THE JOB DONE ############################
+# Set timestamp hostname variable
+set ts = "`hostname`:`date +"%H%M%S"`"
+
+# Check all required info given.
+if ( ${year} == '' ||  ${doy} == '' ) then
+  echo "Not all required fields given -- yr: $year doy: ${doy} --Stop"
+  exit
+endif
+
+# Check if ncftp is requested
+if ( `echo $ftp_prog | awk '{print $1}'` == 'ncftp' ) then
+  if (`echo $ftpcmd | awk '{print $1}'` == 'ftp') then
+    set ftpcmd = `echo $ftp_prog $ftpsite` 
+    echo "-ftp_prog = ncftp requested, ftpcmd now: $ftpcmd" 
+  endif
+endif
+
+# Check if wget is requested                                            #OCh
+  if ( `echo $ftp_prog | awk '{print $1}'` == 'wget' ) then             #OCh
+    if ( `echo $wlogin | wc -w` == 0 ) set wlogin = `echo $ftplogin`    #OCh
+    if ( $wgetsite == '' ) set wgetsite = `echo ftp://$ftpsite`         #OCh
+    set ftpcmd = `echo $ftp_prog`                                       #OCh
+    echo "-ftp_prog = wget requested, ftpcmd now: $ftpcmd"              #OCh
+  endif                                                                 #OCh
+
+# Set up the ftp script
+if (`echo $ftpcmd | awk '{print $1}'` == 'ftp') then 
+  set getcmd = 'get'
+  echo "user $ftplogin" >! tmp.get.$ts  
+  echo "binary" >> tmp.get.$ts
+else if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                                             #OCh
+  cat /dev/null >! tmp.get.$ts                                                                                                         #OCh
+  if (`echo $wgetsite | awk -F: '{print $1}'` == 'https') set wgetoptions = "--no-check-certificate $wgetoptions" #OCh
+else
+  set getcmd = 'get -f -z'
+  echo "binary" >! tmp.get.$ts
+endif
+
+# Set up the iteration
+  set sday = $doy
+  set count = $numd 
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+# ftp to SOPAC and get files
+if ( $archive == "sopac" ) then
+  echo "Getting auto or brdc files for ${yr[1]} ${doy} for ${numd} days from ${ftpsite} "
+#
+# Now set up the script to get files
+  set log = `date '+get_nav_sopac_%y%m%d:%H%M.log'`     #OCh
+  while ( $count )
+#   OLD style cd commands
+#   echo "cd /pub/nav/${yr[1]}/${sday}" >> tmp.get.$ts
+#   echo "cd /pub/rinex/${yr[1]}/${sday}" >> tmp.get.$ts
+    set directory = `echo $ftpdir | sed s/"YYYY"/$yr[1]/ | sed s/"YY"/$yr[2]/ | sed s/"DDD"/${sday}/ | sed s/"SSSS"/${site}/ `
+    if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                                       #OCh
+      if ( $allnav == "no" ) then                                                                                               #OCh
+       echo "wget $wgetoptions -a $log -O brdc${sday}0.${yr[2]}n.Z $wgetsite$directory/auto${sday}0.${yr[2]}n.Z" >> tmp.get.$ts #OCh
+       echo "chmod u+w brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                                 #OCh
+      else                                                                                                                      #OCh
+       echo "wget $wgetoptions -a $log $wgetsite$directory/"\""????${sday}0.${yr[2]}n.Z"\" >> tmp.get.$ts                       #OCh
+       echo "chmod u+w ????${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                                 #OCh
+      endif                                                                                                                     #OCh
+    else                                                                                                                        #OCh
+      echo "cd $directory" >> tmp.get.$ts
+      if ( $allnav == "no" ) then
+        echo $getcmd 'auto'${sday}'0.'${yr[2]}'n.Z  brdc'${sday}'0.'${yr[2]}'n.Z' >> tmp.get.$ts 
+      else
+        echo 'mget ????'${sday}'0.'${yr[2]}'n.Z'  >> tmp.get.$ts
+      endif
+    endif                                                                                                                       #OCh
+    @ count = $count - 1
+    set sday = `echo $sday | awk '{printf" %03d \n", $1 + 1}'`
+  end
+  if (`echo $ftpcmd | awk '{print $1}'` != 'wget') echo 'quit' >> tmp.get.$ts                                                   #OCh
+  cat tmp.get.$ts >! $log
+  echo ' ' >> $log
+  echo '--------------------' >> $log 
+  if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then #OCh
+    csh tmp.get.$ts                                     #OCh
+  else                                                  #OCh
+    $ftpcmd < tmp.get.$ts | grep -v '^230' >> $log
+  endif                                                 #OCh
+#
+# Now uncompress the brdc
+  if ( $ftpcmd[1] == "ftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$3}' >! tmp.unc.$ts 
+  else if ( $ftpcmd[1] == "ncftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$5}' >! tmp.unc.$ts
+  else if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                    #OCh
+    grep '^ *=>' $log | grep -v .listing | awk '{print "gunzip -f",substr($NF,2,length($NF)-2)}' >! tmp.unc.$ts #OCh
+  endif
+  csh tmp.unc.$ts >> $log
+  \rm tmp.get.$ts tmp.unc.$ts
+#
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+else if ( $archive == "cddis" ) then
+  if ( $navdir == "navfile" || $navdir == "navalt" ) then
+     echo "Getting brdc files for ${yr[1]} ${doy} for ${numd} days from ${ftpsite} "   
+  else if ( $navdir == "navmgex" ) then
+     echo "Getting brdm files for ${yr[1]} ${doy} for ${numd} days from ${ftpsite} " 
+  endif 
+#
+# Now set up the script to get files
+  set log = `date '+get_nav_cddis_%y%m%d:%H%M.log'`     #OCh
+  while ( $count )
+#   OLD style cd commands
+#   echo "cd /pub/gps/gpsdata/brdc/${yr[1]}" >> tmp.get.$ts
+#   echo "cd /pub/gps/gpsdata/${yr[2]}${sday}/${yr[2]}n" >> tmp.get.$ts
+    set directory = `echo $ftpdir | sed s/"YYYY"/$yr[1]/ | sed s/"YY"/$yr[2]/ | sed s/"DDD"/${sday}/ | sed s/"SSSS"/${site}/ `
+    if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                                       #OCh
+      if ( $allnav == "no" ) then                                                                                               #OCh
+        if ( $navdir == "navfile" || $navdir == "navalt" ) then 
+          echo "wget $wgetoptions -a $log $wgetsite$directory/brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                          #OCh
+          echo "chmod u+w brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                              #OCh
+        else if ( $navdir == "navmgex" ) then
+          echo "wget $wgetoptions -a $log $wgetsite$directory/brdm${sday}0.${yr[2]}p.Z" >> tmp.get.$ts                          #OCh 
+          echo "chmod u+w brdm${sday}0.${yr[2]}p.Z" >> tmp.get.$ts                                                              #OCh
+          echo "\mv  brdm${sday}0.${yr[2]}p.Z  brdc${sday}0.${yr[2]}n.Z" >> tmp.get.#ts                                          #0Ch
+        endif                                                                                                                   #OCh
+      else                                                                                                                      #OCh
+       echo "wget $wgetoptions -a $log $wgetsite$directory/"\""????${sday}0.${yr[2]}n.Z"\" >> tmp.get.$ts                       #OCh
+       echo "chmod u+w ????${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                                 #OCh
+      endif                                                                                                                     #OCh
+    else                                                                                                                        #OCh
+      echo "cd $directory" >> tmp.get.$ts
+      if ( $allnav == "no" ) then
+        if( $navdir == "navfile" || $navdir == "navalt" ) then                                                                    #OCh
+          echo $getcmd "brdc${sday}0.${yr[2]}n.Z brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                       
+        else if ( $navdir == "navmgex" ) then                                                                                    #OCh
+          echo $getcmd "brdm${sday}0.${yr[2]}p.Z brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                      #OCh
+          ls -l *.Z
+        endif                                                                                                                  #OCh
+      else
+        echo 'mget ????'${sday}'0.'${yr[2]}'n.Z'  >> tmp.get.$ts 
+      endif
+    endif                                                                                                                       #OCh
+    @ count = $count - 1
+    set sday = `echo $sday | awk '{printf" %03d \n", $1 + 1}'`
+  end
+
+  if (`echo $ftpcmd | awk '{print $1}'` != 'wget') echo 'quit' >> tmp.get.$ts                                                   #OCh
+
+  cat tmp.get.$ts >! $log
+  echo ' ' >> $log
+  echo '--------------------' >> $log
+  if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then #OCh
+    csh tmp.get.$ts                                     #OCh
+  else                                                  #OCh
+    $ftpcmd < tmp.get.$ts | grep -v '^230' >> $log
+  endif                                                 #OCh
+                    
+# Now uncompress the brdc 
+  if ( $ftpcmd[1] == "ftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$3}' >! tmp.unc.$ts 
+  else if ( $ftpcmd[1] == "ncftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$5}' >! tmp.unc.$ts
+  else if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                           #OCh
+    grep '^ *=>' $log | grep -v .listing | awk '{print "gunzip -f",substr($NF,2,length($NF)-2)}' >! tmp.unc.$ts        #OCh
+  endif
+  csh tmp.unc.$ts >> $log
+
+  \rm tmp.get.$ts tmp.unc.$ts
+
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+else if ( $archive == "wuhan" ) then
+  if ( $navdir == "navfile" || $navdir == "navalt" ) then
+     echo "Getting brdc files for ${yr[1]} ${doy} for ${numd} days from ${ftpsite} "   
+  else if ( $navdir == "navmgex" ) then
+     echo "Getting brdm files for ${yr[1]} ${doy} for ${numd} days from ${ftpsite} " 
+  endif 
+#
+# Now set up the script to get files
+  set log = `date '+get_nav_cddis_%y%m%d:%H%M.log'`     #OCh
+  while ( $count )
+#   OLD style cd commands
+#   echo "cd /pub/gps/gpsdata/brdc/${yr[1]}" >> tmp.get.$ts
+#   echo "cd /pub/gps/gpsdata/${yr[2]}${sday}/${yr[2]}n" >> tmp.get.$ts
+    set directory = `echo $ftpdir | sed s/"YYYY"/$yr[1]/ | sed s/"YY"/$yr[2]/ | sed s/"DDD"/${sday}/ | sed s/"SSSS"/${site}/ `
+    if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                                       #OCh
+      if ( $allnav == "no" ) then                                                                                               #OCh
+        if ( $navdir == "navfile" || $navdir == "navalt" ) then 
+          echo "wget $wgetoptions -a $log $wgetsite$directory/brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                          #OCh
+          echo "chmod u+w brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                              #OCh
+        else if ( $navdir == "navmgex" ) then
+          echo "wget $wgetoptions -a $log $wgetsite$directory/brdm${sday}0.${yr[2]}p.Z" >> tmp.get.$ts                          #OCh 
+          echo "chmod u+w brdm${sday}0.${yr[2]}p.Z" >> tmp.get.$ts                                                              #OCh
+          echo "\mv  brdm${sday}0.${yr[2]}p.Z  brdc${sday}0.${yr[2]}n.Z" >> tmp.get.#ts                                          #0Ch
+        endif                                                                                                                   #OCh
+      else                                                                                                                      #OCh
+       echo "wget $wgetoptions -a $log $wgetsite$directory/"\""????${sday}0.${yr[2]}n.Z"\" >> tmp.get.$ts                       #OCh
+       echo "chmod u+w ????${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                                                 #OCh
+      endif                                                                                                                     #OCh
+    else                                                                                                                        #OCh
+      echo "cd $directory" >> tmp.get.$ts
+      if ( $allnav == "no" ) then
+        if( $navdir == "navfile" || $navdir == "navalt" ) then                                                                    #OCh
+          echo $getcmd "brdc${sday}0.${yr[2]}n.Z brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                       
+        else if ( $navdir == "navmgex" ) then                                                                                    #OCh
+          echo $getcmd "brdm${sday}0.${yr[2]}p.Z brdc${sday}0.${yr[2]}n.Z" >> tmp.get.$ts                                      #OCh
+          ls -l *.Z
+        endif                                                                                                                  #OCh
+      else
+        echo 'mget ????'${sday}'0.'${yr[2]}'n.Z'  >> tmp.get.$ts 
+      endif
+    endif                                                                                                                       #OCh
+    @ count = $count - 1
+    set sday = `echo $sday | awk '{printf" %03d \n", $1 + 1}'`
+  end
+
+  if (`echo $ftpcmd | awk '{print $1}'` != 'wget') echo 'quit' >> tmp.get.$ts                                                   #OCh
+
+  cat tmp.get.$ts >! $log
+  echo ' ' >> $log
+  echo '--------------------' >> $log
+  if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then #OCh
+    csh tmp.get.$ts                                     #OCh
+  else                                                  #OCh
+    $ftpcmd < tmp.get.$ts | grep -v '^230' >> $log
+  endif                                                 #OCh
+                    
+# Now uncompress the brdc 
+  if ( $ftpcmd[1] == "ftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$3}' >! tmp.unc.$ts 
+  else if ( $ftpcmd[1] == "ncftp" ) then
+    grep '^get ' tmp.get.$ts | awk '{print "gunzip -f",$5}' >! tmp.unc.$ts
+  else if (`echo $ftpcmd | awk '{print $1}'` == 'wget') then                                                           #OCh
+    grep '^ *=>' $log | grep -v .listing | awk '{print "gunzip -f",substr($NF,2,length($NF)-2)}' >! tmp.unc.$ts        #OCh
+  endif
+  csh tmp.unc.$ts >> $log
+
+  \rm tmp.get.$ts tmp.unc.$ts
+
+#---------------------------------------------------------------------------
+#---------------------------------------------------------------------------
+
+else
+  echo "Archive $archive not available from this script. --Stop"
+  exit
+endif
+
+# Thats all.
+exit
+
+————————————————
+版权声明：本文为CSDN博主「zzh_my」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/zzh_my/article/details/106029147
